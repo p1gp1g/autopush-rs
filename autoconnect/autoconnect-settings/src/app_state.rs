@@ -11,6 +11,7 @@ use autoconnect_common::{
     broadcast::BroadcastChangeTracker, megaphone::init_and_spawn_megaphone_updater,
     registry::ClientRegistry,
 };
+use autopush_common::db::{client::DbClient, redis::RedisClientImpl, DbSettings, StorageType};
 use autopush_common::db::{client::DbClient, DbSettings, StorageType};
 #[cfg(feature = "reliable_report")]
 use autopush_common::reliability::PushReliability;
@@ -83,6 +84,11 @@ impl AppState {
                 client.spawn_sweeper(Duration::from_secs(30));
                 Box::new(client)
             }
+            #[cfg(feature = "redis")]
+            StorageType::Redis => Box::new(
+                RedisClientImpl::new(metrics.clone(), &db_settings)
+                    .map_err(|e| ConfigError::Message(e.to_string()))?,
+            ),
             _ => panic!(
                 "Invalid Storage type {:?}. Check {}__DB_DSN.",
                 storage_type,
