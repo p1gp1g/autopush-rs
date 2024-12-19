@@ -134,13 +134,11 @@ impl DbClient for RedisClientImpl {
         let co_key = self.last_co_key(&user.uaid);
         let _: () = redis::pipe()
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
-            .ignore()
             .set_options(
                 user_key,
                 serde_json::to_string(user).unwrap(),
                 self.redis_opts,
             )
-            .ignore()
             .exec(&mut con)
             .unwrap();
         Ok(())
@@ -196,13 +194,9 @@ impl DbClient for RedisClientImpl {
         let msg_list_key = self.message_list_key(&uaid);
         redis::pipe()
             .del(&user_key)
-            .ignore()
             .del(&co_key)
-            .ignore()
             .del(&chan_list_key)
-            .ignore()
             .del(&msg_list_key)
-            .ignore()
             .exec(&mut con)
             .unwrap();
         Ok(())
@@ -215,9 +209,7 @@ impl DbClient for RedisClientImpl {
 
         let _: () = redis::pipe()
             .rpush(chan_list_key, channel_id.as_hyphenated().to_string())
-            .ignore()
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
-            .ignore()
             .exec(&mut con)
             .unwrap();
         Ok(())
@@ -231,7 +223,6 @@ impl DbClient for RedisClientImpl {
         let chan_list_key = self.channel_list_key(&uaid);
         redis::pipe()
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
-            .ignore()
             .rpush(
                 chan_list_key,
                 channels
@@ -239,7 +230,6 @@ impl DbClient for RedisClientImpl {
                     .map(|c| c.as_hyphenated().to_string())
                     .collect::<Vec<String>>(),
             )
-            .ignore()
             .exec(&mut con)
             .unwrap();
         Ok(())
@@ -328,12 +318,11 @@ impl DbClient for RedisClientImpl {
             // If a message is already stored for that topic, we remove it
             if let Some(id) = old_msg_id {
                 trace!("🉑 The topic had a message: {}", &id);
-                pipe.zrem(&msg_list_key, &id).ignore();
-                pipe.del(self.message_key(&uaid, &id)).ignore();
+                pipe.zrem(&msg_list_key, &id)
+                    .del(self.message_key(&uaid, &id));
             }
             // Setting the key replace the old one if any
-            pipe.set_options(&topic_key, &message.chidmessageid(), opts)
-                .ignore();
+            pipe.set_options(&topic_key, &message.chidmessageid(), opts);
             true
         } else {
             false
@@ -348,11 +337,9 @@ impl DbClient for RedisClientImpl {
             serde_json::to_string(&NotificationRecord::from_notif(&uaid, message)).unwrap(),
             opts,
         )
-        .ignore()
         // The function [fecth_timestamp_messages] takes a timestamp in input,
         // here we use the timestamp of the record (in ms)
-        .zadd(msg_list_key, &msg_id, ms_since_epoch())
-        .ignore();
+        .zadd(&msg_list_key, &msg_id, ms_since_epoch());
 
         let _: () = pipe.exec(&mut con).unwrap();
         self.metrics
@@ -393,9 +380,7 @@ impl DbClient for RedisClientImpl {
         let mut con = self.connection()?;
         redis::pipe()
             .zrem(&msg_list_key, &chidmessageid)
-            .ignore()
             .del(&msg_key)
-            .ignore()
             .exec(&mut con)
             .unwrap();
         self.metrics
