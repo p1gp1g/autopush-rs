@@ -2,6 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 #[cfg(feature = "bigtable")]
 use autopush_common::db::bigtable::BigTableClientImpl;
+#[cfg(feature = "redis")]
+use autopush_common::db::redis::RedisClientImpl;
 use cadence::StatsdClient;
 use config::ConfigError;
 use fernet::{Fernet, MultiFernet};
@@ -11,7 +13,7 @@ use autoconnect_common::{
     broadcast::BroadcastChangeTracker, megaphone::init_and_spawn_megaphone_updater,
     registry::ClientRegistry,
 };
-use autopush_common::db::{client::DbClient, redis::RedisClientImpl, DbSettings, StorageType};
+use autopush_common::db::{client::DbClient, DbSettings, StorageType};
 
 use crate::{Settings, ENV_PREFIX};
 
