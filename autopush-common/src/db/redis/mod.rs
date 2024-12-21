@@ -9,7 +9,6 @@
 /// `autopush/msgs_exp/{uaid}` SortedSet to store the list of the pending message ids, ordered by expiry date, this is because SortedSet elements can't have independant expiry date
 /// `autopush/msg/{uaid}/{chidmessageid}`, with `{chidmessageid} == {chid}:{version}` String to store
 /// the content of the messages
-/// `autopush/topic/{uaid}/{chid}/{topic}` String to store the (last) message id of a given topic
 ///
 mod redis_client;
 
