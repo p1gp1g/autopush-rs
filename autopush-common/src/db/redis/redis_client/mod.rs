@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use cadence::{CountedExt, StatsdClient};
-use redis::{Commands, ConnectionLike, SetExpiry, SetOptions};
+use redis::{AsyncCommands, SetExpiry, SetOptions};
 use uuid::Uuid;
 
 use crate::db::NotificationRecord;
@@ -87,23 +87,18 @@ impl RedisClientImpl {
 
     Pools also return a ConnectionLike, so we can add support for pools later.
     */
-    fn connection(&self) -> DbResult<impl ConnectionLike> {
-        if let Some(timeout) = self.settings.timeout {
-            if timeout.is_zero() {
-                return match self.client.get_connection_with_timeout(timeout) {
-                    Ok(r) => Ok(r),
-                    Err(_) => Err(DbError::ConnectionError(
-                        "Cannot connect to redis".to_owned(),
-                    )),
-                };
-            }
-        }
-        match self.client.get_connection() {
-            Ok(r) => Ok(r),
-            Err(_) => Err(DbError::ConnectionError(
-                "Cannot connect to redis".to_owned(),
-            )),
-        }
+    async fn connection(&self) -> DbResult<redis::aio::MultiplexedConnection> {
+        let config = if self.settings.timeout.is_some_and(|t| !t.is_zero()) {
+            redis::AsyncConnectionConfig::new()
+                .set_connection_timeout(self.settings.timeout.unwrap())
+        } else {
+            redis::AsyncConnectionConfig::new()
+        };
+        Ok(self
+            .client
+            .get_multiplexed_async_connection_with_config(&config)
+            .await
+            .map_err(|e| DbError::ConnectionError(format!("Cannot connect to redis: {}", e)))?)
     }
 
     fn user_key(&self, uaid: &Uaid) -> String {
@@ -142,14 +137,15 @@ impl DbClient for RedisClientImpl {
     async fn add_user(&self, user: &User) -> DbResult<()> {
         trace!("🐰 Adding user");
         trace!("🐰 Logged at {}", &user.connected_at);
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let uaid = Uaid(&user.uaid);
         let user_key = self.user_key(&uaid);
         let co_key = self.last_co_key(&uaid);
         let _: () = redis::pipe()
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
             .set_options(user_key, serde_json::to_string(user)?, self.redis_opts)
-            .exec(&mut con)?;
+            .exec_async(&mut con)
+            .await?;
         Ok(())
     }
 
@@ -166,9 +162,9 @@ impl DbClient for RedisClientImpl {
     /// "lively".
     async fn update_user(&self, user: &mut User) -> DbResult<bool> {
         trace!("🐰 Updating user");
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let co_key = self.last_co_key(&Uaid(&user.uaid));
-        let last_co: Option<u64> = con.get(&co_key)?;
+        let last_co: Option<u64> = con.get(&co_key).await?;
         if last_co.is_some_and(|c| c < user.connected_at) {
             trace!(
                 "🐰 Was connected at {}, now at {}",
@@ -183,10 +179,11 @@ impl DbClient for RedisClientImpl {
     }
 
     async fn get_user(&self, uaid: &Uuid) -> DbResult<Option<User>> {
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let user_key = self.user_key(&Uaid(uaid));
         let user: Option<User> = con
-            .get::<&str, Option<String>>(&user_key)?
+            .get::<&str, Option<String>>(&user_key)
+            .await?
             .and_then(|s| serde_json::from_str(s.as_ref()).ok());
         if user.is_some() {
             trace!("🐰 Found a record for {}", &uaid);
@@ -196,7 +193,7 @@ impl DbClient for RedisClientImpl {
 
     async fn remove_user(&self, uaid: &Uuid) -> DbResult<()> {
         let uaid = Uaid(uaid);
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let user_key = self.user_key(&uaid);
         let co_key = self.last_co_key(&uaid);
         let chan_list_key = self.channel_list_key(&uaid);
@@ -208,20 +205,22 @@ impl DbClient for RedisClientImpl {
             .del(&chan_list_key)
             .del(&msg_list_key)
             .del(&exp_list_key)
-            .exec(&mut con)?;
+            .exec_async(&mut con)
+            .await?;
         Ok(())
     }
 
     async fn add_channel(&self, uaid: &Uuid, channel_id: &Uuid) -> DbResult<()> {
         let uaid = Uaid(uaid);
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let co_key = self.last_co_key(&uaid);
         let chan_list_key = self.channel_list_key(&uaid);
 
         let _: () = redis::pipe()
             .rpush(chan_list_key, channel_id.as_hyphenated().to_string())
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
-            .exec(&mut con)?;
+            .exec_async(&mut con)
+            .await?;
         Ok(())
     }
 
@@ -229,7 +228,7 @@ impl DbClient for RedisClientImpl {
     async fn add_channels(&self, uaid: &Uuid, channels: HashSet<Uuid>) -> DbResult<()> {
         let uaid = Uaid(uaid);
         // channel_ids are stored as a set within a single redis key
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let co_key = self.last_co_key(&uaid);
         let chan_list_key = self.channel_list_key(&uaid);
         redis::pipe()
@@ -241,16 +240,19 @@ impl DbClient for RedisClientImpl {
                     .map(|c| c.as_hyphenated().to_string())
                     .collect::<Vec<String>>(),
             )
-            .exec(&mut con)?;
+            .exec_async(&mut con)
+            .await?;
         Ok(())
     }
 
     async fn get_channels(&self, uaid: &Uuid) -> DbResult<HashSet<Uuid>> {
         let uaid = Uaid(uaid);
-        let mut con = self.connection()?;
+        let mut con = self.client.get_multiplexed_async_connection().await?;
+        //let mut con = self.connection().await?;
         let chan_list_key = self.channel_list_key(&uaid);
         let channels: HashSet<Uuid> = con
-            .lrange::<&str, HashSet<String>>(&chan_list_key, 0, -1)?
+            .lrange::<&str, HashSet<String>>(&chan_list_key, 0, -1)
+            .await?
             .into_iter()
             .filter_map(|s| Uuid::from_str(&s).ok())
             .collect();
@@ -262,7 +264,7 @@ impl DbClient for RedisClientImpl {
     async fn remove_channel(&self, uaid: &Uuid, channel_id: &Uuid) -> DbResult<bool> {
         let uaid = Uaid(uaid);
         let channel_id = Chanid(channel_id);
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let co_key = self.last_co_key(&uaid);
         let chan_list_key = self.channel_list_key(&uaid);
         // Remove {channel_id} from autopush/channel/{auid}
@@ -271,7 +273,8 @@ impl DbClient for RedisClientImpl {
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
             .ignore()
             .lrem(&chan_list_key, 1, channel_id.to_string())
-            .query(&mut con)?;
+            .query_async(&mut con)
+            .await?;
         Ok(status)
     }
 
@@ -297,7 +300,7 @@ impl DbClient for RedisClientImpl {
     */
     async fn save_message(&self, uaid: &Uuid, message: Notification) -> DbResult<()> {
         let uaid = Uaid(uaid);
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
         let msg_key = self.message_key(&uaid, &message.chidmessageid());
@@ -324,7 +327,7 @@ impl DbClient for RedisClientImpl {
         let is_topic = if let Some(topic) = &message.topic {
             let topic_key = self.topic_key(&uaid, &Chanid(&message.channel_id), &topic);
             // We check if a message is already saved for this topic
-            let old_msg_id: Option<String> = con.get(&topic_key)?;
+            let old_msg_id: Option<String> = con.get(&topic_key).await?;
             // If a message is already stored for that topic, we remove it
             if let Some(id) = old_msg_id {
                 trace!("🐰 The topic had a message: {}", &id);
@@ -355,7 +358,7 @@ impl DbClient for RedisClientImpl {
         .zadd(&exp_list_key, &msg_id, expiry)
         .zadd(&msg_list_key, &msg_id, ms_since_epoch());
 
-        let _: () = pipe.exec(&mut con)?;
+        let _: () = pipe.exec_async(&mut con).await?;
         self.metrics
             .incr_with_tags("notification.message.stored")
             .with_tag("topic", &is_topic.to_string())
@@ -382,15 +385,16 @@ impl DbClient for RedisClientImpl {
         debug!("🐰🔥 Incrementing storage to {}", timestamp);
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
-        let mut con = self.connection()?;
-        let exp_id_list: Vec<String> = con.zrangebyscore(&exp_list_key, 0, timestamp)?;
+        let mut con = self.connection().await?;
+        let exp_id_list: Vec<String> = con.zrangebyscore(&exp_list_key, 0, timestamp).await?;
         if exp_id_list.len() > 0 {
             trace!("🐰🔥 Deleting {} expired msgs", exp_id_list.len());
             redis::pipe()
                 .del(&exp_id_list)
                 .zrem(&msg_list_key, &exp_id_list)
                 .zrem(&exp_list_key, &exp_id_list)
-                .exec(&mut con)?;
+                .exec_async(&mut con)
+                .await?;
         }
         Ok(())
     }
@@ -407,14 +411,15 @@ impl DbClient for RedisClientImpl {
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
         debug!("🐰🔥 Deleting message {}", &msg_key);
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         // We remove the id from the exp list at the end, to be sure
         // it can't be removed from the list before the message is removed
         redis::pipe()
             .del(&msg_key)
             .zrem(&msg_list_key, &chidmessageid)
             .zrem(&exp_list_key, &chidmessageid)
-            .exec(&mut con)?;
+            .exec_async(&mut con)
+            .await?;
         self.metrics
             .incr_with_tags("notification.message.deleted")
             .with_tag("database", &self.name())
@@ -450,7 +455,7 @@ impl DbClient for RedisClientImpl {
     ) -> DbResult<FetchMessageResponse> {
         let uaid = Uaid(uaid);
         trace!("🐰 Fecthing {} messages since {:?}", limit, timestamp);
-        let mut con = self.connection()?;
+        let mut con = self.connection().await?;
         let msg_list_key = self.message_list_key(&uaid);
         let (messages_id, mut scores): (Vec<String>, Vec<u64>) = con
             .zrangebyscore_limit_withscores::<&str, u64, &str, Vec<(String, u64)>>(
@@ -459,7 +464,8 @@ impl DbClient for RedisClientImpl {
                 "+inf",
                 0,
                 limit as isize,
-            )?
+            )
+            .await?
             .into_iter()
             .map(|(id, s): (String, u64)| (self.message_key(&uaid, &id), s))
             .unzip();
@@ -473,7 +479,8 @@ impl DbClient for RedisClientImpl {
         let messages: Vec<Notification> = if messages_id.len() == 0 {
             vec![]
         } else {
-            con.mget::<&Vec<String>, Vec<Option<String>>>(&messages_id)?
+            con.mget::<&Vec<String>, Vec<Option<String>>>(&messages_id)
+                .await?
                 .into_iter()
                 .filter_map(|opt: Option<String>| {
                     if opt.is_none() {
@@ -499,8 +506,8 @@ impl DbClient for RedisClientImpl {
     }
 
     async fn health_check(&self) -> DbResult<bool> {
-        let status = self.connection()?.check_connection();
-        Ok(status)
+        let _ = self.connection().await?;
+        Ok(true)
     }
 
     /// Returns true, because there's no table in Redis
