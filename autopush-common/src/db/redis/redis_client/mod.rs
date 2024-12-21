@@ -65,14 +65,14 @@ pub struct RedisClientImpl {
 impl RedisClientImpl {
     pub fn new(metrics: Arc<StatsdClient>, settings: &DbSettings) -> DbResult<Self> {
         // let env = Arc::new(EnvBuilder::new().build());
-        debug!("🏊 BT Pool new");
+        debug!("🐰 New redis client");
         let dsn = settings
             .dsn
             .clone()
             .ok_or(DbError::General("Could not find DSN".to_owned()))?;
         let client = redis::Client::open(dsn)?;
         let db_settings = RedisDbSettings::try_from(settings.db_settings.as_ref())?;
-        info!("🉑 {:#?}", db_settings);
+        info!("🐰 {:#?}", db_settings);
 
         Ok(Self {
             client,
@@ -141,8 +141,8 @@ impl RedisClientImpl {
 impl DbClient for RedisClientImpl {
     /// add user to the database
     async fn add_user(&self, user: &User) -> DbResult<()> {
-        trace!("🉑 Adding user");
-        trace!("Logged at {}", &user.connected_at);
+        trace!("🐰 Adding user");
+        trace!("🐰 Logged at {}", &user.connected_at);
         let mut con = self.connection()?;
         let uaid = Uaid(&user.uaid);
         let user_key = self.user_key(&uaid);
@@ -166,13 +166,13 @@ impl DbClient for RedisClientImpl {
     /// somehow remain connected the duration of MAX_ROUTER_TTL, may be dropped as not being
     /// "lively".
     async fn update_user(&self, user: &mut User) -> DbResult<bool> {
-        trace!("🉑 Updating user");
+        trace!("🐰 Updating user");
         let mut con = self.connection()?;
         let co_key = self.last_co_key(&Uaid(&user.uaid));
         let last_co: Option<u64> = con.get(&co_key)?;
         if last_co.is_some_and(|c| c < user.connected_at) {
             trace!(
-                "🉑 Was connected at {}, now at {}",
+                "🐰 Was connected at {}, now at {}",
                 last_co.unwrap(),
                 &user.connected_at
             );
@@ -190,7 +190,7 @@ impl DbClient for RedisClientImpl {
             .get::<&str, Option<String>>(&user_key)?
             .and_then(|s| serde_json::from_str(s.as_ref()).ok());
         if user.is_some() {
-            trace!("🉑 Found a record for {}", &uaid);
+            trace!("🐰 Found a record for {}", &uaid);
         }
         Ok(user)
     }
@@ -255,7 +255,7 @@ impl DbClient for RedisClientImpl {
             .into_iter()
             .filter_map(|s| Uuid::from_str(&s).ok())
             .collect();
-        trace!("🉑 Found {} channels for {}", channels.len(), &uaid);
+        trace!("🐰 Found {} channels for {}", channels.len(), &uaid);
         Ok(channels)
     }
 
@@ -267,7 +267,7 @@ impl DbClient for RedisClientImpl {
         let co_key = self.last_co_key(&uaid);
         let chan_list_key = self.channel_list_key(&uaid);
         // Remove {channel_id} from autopush/channel/{auid}
-        trace!("🉑 Removing channel {}", channel_id);
+        trace!("🐰 Removing channel {}", channel_id);
         let (status,): (bool,) = redis::pipe()
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
             .ignore()
@@ -306,9 +306,9 @@ impl DbClient for RedisClientImpl {
         // see autoendpoint/src/extractors/notification_headers.rs
         let opts = SetOptions::default().with_expiration(SetExpiry::EX(message.ttl));
 
-        debug!("🗄️ Saving message {} :: {:?}", &msg_key, &message);
+        debug!("🐰 Saving message {} :: {:?}", &msg_key, &message);
         trace!(
-            "🉑 timestamp: {:?}",
+            "🐰 timestamp: {:?}",
             &message.timestamp.to_be_bytes().to_vec()
         );
 
@@ -318,7 +318,7 @@ impl DbClient for RedisClientImpl {
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        trace!("🉑 Message Expiry {}", expiry);
+        trace!("🐰 Message Expiry {}", expiry);
 
         let mut pipe = redis::pipe();
 
@@ -328,7 +328,7 @@ impl DbClient for RedisClientImpl {
             let old_msg_id: Option<String> = con.get(&topic_key)?;
             // If a message is already stored for that topic, we remove it
             if let Some(id) = old_msg_id {
-                trace!("🉑 The topic had a message: {}", &id);
+                trace!("🐰 The topic had a message: {}", &id);
                 // We remove the id from the exp list at the end, to be sure
                 // it can't be removed from the list before the message is removed
                 pipe.del(self.message_key(&uaid, &id))
@@ -380,13 +380,13 @@ impl DbClient for RedisClientImpl {
     /// Delete expired messages
     async fn increment_storage(&self, uaid: &Uuid, timestamp: u64) -> DbResult<()> {
         let uaid = Uaid(uaid);
-        debug!("🉑🔥 Incrementing storage to {}", timestamp);
+        debug!("🐰🔥 Incrementing storage to {}", timestamp);
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
         let mut con = self.connection()?;
         let exp_id_list: Vec<String> = con.zrangebyscore(&exp_list_key, 0, timestamp)?;
         if exp_id_list.len() > 0 {
-            trace!("🉑🔥 Deleting {} expired msgs", exp_id_list.len());
+            trace!("🐰🔥 Deleting {} expired msgs", exp_id_list.len());
             redis::pipe()
                 .del(&exp_id_list)
                 .zrem(&msg_list_key, &exp_id_list)
@@ -400,14 +400,14 @@ impl DbClient for RedisClientImpl {
     async fn remove_message(&self, uaid: &Uuid, chidmessageid: &str) -> DbResult<()> {
         let uaid = Uaid(uaid);
         trace!(
-            "🉑 attemping to delete {:?} :: {:?}",
+            "🐰 attemping to delete {:?} :: {:?}",
             uaid.to_string(),
             chidmessageid
         );
         let msg_key = self.message_key(&uaid, &chidmessageid);
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
-        debug!("🉑🔥 Deleting message {}", &msg_key);
+        debug!("🐰🔥 Deleting message {}", &msg_key);
         let mut con = self.connection()?;
         // We remove the id from the exp list at the end, to be sure
         // it can't be removed from the list before the message is removed
@@ -453,7 +453,7 @@ impl DbClient for RedisClientImpl {
         limit: usize,
     ) -> DbResult<FetchMessageResponse> {
         let uaid = Uaid(uaid);
-        trace!("Fecthing {} messages since {:?}", limit, timestamp);
+        trace!("🐰 Fecthing {} messages since {:?}", limit, timestamp);
         let mut con = self.connection()?;
         let msg_list_key = self.message_list_key(&uaid);
         let (messages_id, mut scores): (Vec<String>, Vec<u64>) = con
@@ -468,7 +468,7 @@ impl DbClient for RedisClientImpl {
             .map(|(id, s): (String, u64)| (self.message_key(&uaid, &id), s))
             .unzip();
         if messages_id.len() == 0 {
-            trace!("No message found");
+            trace!("🐰 No message found");
             return Ok(FetchMessageResponse {
                 messages: vec![],
                 timestamp: None,
@@ -495,7 +495,7 @@ impl DbClient for RedisClientImpl {
                 .collect()
         };
         let timestamp = scores.pop();
-        trace!("Found {} messages until {:?}", messages.len(), timestamp);
+        trace!("🐰 Found {} messages until {:?}", messages.len(), timestamp);
         Ok(FetchMessageResponse {
             messages,
             timestamp,
