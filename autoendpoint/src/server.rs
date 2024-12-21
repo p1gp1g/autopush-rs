@@ -13,11 +13,10 @@ use serde_json::json;
 
 #[cfg(feature = "bigtable")]
 use autopush_common::db::bigtable::BigTableClientImpl;
+#[cfg(feature = "redis")]
+use autopush_common::db::redis::RedisClientImpl;
 use autopush_common::{
-    db::{
-        client::DbClient, redis::RedisClientImpl, spawn_pool_periodic_reporter, DbSettings,
-        StorageType,
-    },
+    db::{client::DbClient, spawn_pool_periodic_reporter, DbSettings, StorageType},
     middleware::sentry::SentryWrapper,
 };
 
