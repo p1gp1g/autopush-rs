@@ -47,8 +47,6 @@ impl Notification {
     ///     {chid}:{message_id}
     pub fn chidmessageid(&self) -> String {
         let chid = self.channel_id.as_hyphenated();
-        #[cfg(feature = "redis")]
-        return format!("{}:{}", chid, self.version);
 
         if let Some(ref topic) = self.topic {
             format!("{TOPIC_NOTIFICATION_PREFIX}:{chid}:{topic}")
