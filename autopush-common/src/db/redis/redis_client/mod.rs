@@ -125,10 +125,6 @@ impl RedisClientImpl {
     fn message_key(&self, uaid: &Uaid, chidmessageid: &str) -> String {
         format!("autopush/msg/{}/{}", uaid, chidmessageid)
     }
-
-    fn topic_key(&self, uaid: &Uaid, chan_id: &Chanid, topic: &str) -> String {
-        format!("autopush/topic/{}/{}/{}", uaid, chan_id, topic)
-    }
 }
 
 #[async_trait]
@@ -303,7 +299,8 @@ impl DbClient for RedisClientImpl {
         let mut con = self.connection().await?;
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
-        let msg_key = self.message_key(&uaid, &message.chidmessageid());
+        let msg_id = &message.chidmessageid();
+        let msg_key = self.message_key(&uaid, &msg_id);
         // message.ttl is already min(headers.ttl, MAX_NOTIFICATION_TTL)
         // see autoendpoint/src/extractors/notification_headers.rs
         let opts = SetOptions::default().with_expiration(SetExpiry::EX(message.ttl));
@@ -324,29 +321,14 @@ impl DbClient for RedisClientImpl {
 
         let mut pipe = redis::pipe();
 
-        let is_topic = if let Some(topic) = &message.topic {
-            let topic_key = self.topic_key(&uaid, &Chanid(&message.channel_id), &topic);
-            // We check if a message is already saved for this topic
-            let old_msg_id: Option<String> = con.get(&topic_key).await?;
-            // If a message is already stored for that topic, we remove it
-            if let Some(id) = old_msg_id {
-                trace!("🐰 The topic had a message: {}", &id);
-                // We remove the id from the exp list at the end, to be sure
-                // it can't be removed from the list before the message is removed
-                pipe.del(self.message_key(&uaid, &id))
-                    .zrem(&msg_list_key, &id)
-                    .zrem(&exp_list_key, &id);
-            }
-            // Setting the key replace the old one if any
-            pipe.set_options(&topic_key, &message.chidmessageid(), opts);
-            true
-        } else {
-            false
-        };
+        // If this is a topic message:
+        // zadd(msg_list_key) and zadd(exp_list_key) will replace their old entry
+        // in the hashset if one already exists
+        // and set(msg_key, message) will override it too: nothing to do.
+        let is_topic = message.topic.is_some();
 
         // Store notification record in autopush/msg/{aud}/{chidmessageid}
         // And store {chidmessageid} in autopush/msgs/{aud}
-        let msg_id = &message.chidmessageid();
         let msg_key = self.message_key(&uaid, &msg_id);
         pipe.set_options(
             msg_key,
