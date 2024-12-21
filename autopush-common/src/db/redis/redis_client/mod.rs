@@ -64,7 +64,6 @@ pub struct RedisClientImpl {
 
 impl RedisClientImpl {
     pub fn new(metrics: Arc<StatsdClient>, settings: &DbSettings) -> DbResult<Self> {
-        // let env = Arc::new(EnvBuilder::new().build());
         debug!("🐰 New redis client");
         let dsn = settings
             .dsn
@@ -441,9 +440,6 @@ impl DbClient for RedisClientImpl {
     /// after [`timestamp`] (millisecs).
     ///
     /// If [`limit`] = 0, we fetch all messages after [`timestamp`].
-    ///
-    /// Note: Bigtable uses [`Notification.sortkey_timestamp`] instead, and the timestamp
-    /// is in seconds.
     ///
     /// This can return expired messages, following bigtables behavior
     async fn fetch_timestamp_messages(
