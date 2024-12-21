@@ -801,6 +801,7 @@ mod tests {
         let test_notification = crate::db::Notification {
             timestamp: now(),
             version: "version1".to_owned(),
+            sortkey_timestamp: Some(sort_key + 10),
             ..test_notification_0
         };
 
