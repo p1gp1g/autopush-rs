@@ -18,6 +18,8 @@ use crate::db::{
 };
 use crate::util::ms_since_epoch;
 
+mod error;
+
 use super::RedisDbSettings;
 
 /// Semi convenience wrapper to ensure that the UAID is formatted and displayed consistently.
@@ -55,7 +57,7 @@ impl RedisClientImpl {
             .dsn
             .clone()
             .ok_or(DbError::General("Could not find DSN".to_owned()))?;
-        let client = redis::Client::open(dsn).unwrap();
+        let client = redis::Client::open(dsn)?;
         let db_settings = RedisDbSettings::try_from(settings.db_settings.as_ref())?;
         info!("🉑 {:#?}", db_settings);
 
@@ -138,13 +140,8 @@ impl DbClient for RedisClientImpl {
         let co_key = self.last_co_key(&user.uaid);
         let _: () = redis::pipe()
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
-            .set_options(
-                user_key,
-                serde_json::to_string(user).unwrap(),
-                self.redis_opts,
-            )
-            .exec(&mut con)
-            .unwrap();
+            .set_options(user_key, serde_json::to_string(user)?, self.redis_opts)
+            .exec(&mut con)?;
         Ok(())
     }
 
@@ -163,7 +160,7 @@ impl DbClient for RedisClientImpl {
         trace!("🉑 Updating user");
         let mut con = self.connection()?;
         let co_key = self.last_co_key(&user.uaid);
-        let last_co: Option<u64> = con.get(&co_key).unwrap();
+        let last_co: Option<u64> = con.get(&co_key)?;
         if last_co.is_some_and(|c| c < user.connected_at) {
             trace!(
                 "🉑 Was connected at {}, now at {}",
@@ -181,9 +178,8 @@ impl DbClient for RedisClientImpl {
         let mut con = self.connection()?;
         let user_key = self.user_key(uaid);
         let user: Option<User> = con
-            .get::<&str, Option<String>>(&user_key)
-            .unwrap()
-            .and_then(|s| serde_json::from_str(s.as_ref()).unwrap());
+            .get::<&str, Option<String>>(&user_key)?
+            .and_then(|s| serde_json::from_str(s.as_ref()).ok());
         if user.is_some() {
             trace!("🉑 Found a record for {}", &uaid);
         }
@@ -203,8 +199,7 @@ impl DbClient for RedisClientImpl {
             .del(&chan_list_key)
             .del(&msg_list_key)
             .del(&exp_list_key)
-            .exec(&mut con)
-            .unwrap();
+            .exec(&mut con)?;
         Ok(())
     }
 
@@ -216,8 +211,7 @@ impl DbClient for RedisClientImpl {
         let _: () = redis::pipe()
             .rpush(chan_list_key, channel_id.as_hyphenated().to_string())
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
-            .exec(&mut con)
-            .unwrap();
+            .exec(&mut con)?;
         Ok(())
     }
 
@@ -236,8 +230,7 @@ impl DbClient for RedisClientImpl {
                     .map(|c| c.as_hyphenated().to_string())
                     .collect::<Vec<String>>(),
             )
-            .exec(&mut con)
-            .unwrap();
+            .exec(&mut con)?;
         Ok(())
     }
 
@@ -245,10 +238,9 @@ impl DbClient for RedisClientImpl {
         let mut con = self.connection()?;
         let chan_list_key = self.channel_list_key(&uaid);
         let channels: HashSet<Uuid> = con
-            .lrange::<&str, HashSet<String>>(&chan_list_key, 0, -1)
-            .unwrap()
+            .lrange::<&str, HashSet<String>>(&chan_list_key, 0, -1)?
             .into_iter()
-            .map(|s| Uuid::from_str(&s).unwrap())
+            .filter_map(|s| Uuid::from_str(&s).ok())
             .collect();
         trace!("🉑 Found {} channels for {}", channels.len(), &uaid);
         Ok(channels)
@@ -265,8 +257,7 @@ impl DbClient for RedisClientImpl {
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
             .ignore()
             .lrem(&chan_list_key, 1, channel_id.as_hyphenated().to_string())
-            .query(&mut con)
-            .unwrap();
+            .query(&mut con)?;
         Ok(status)
     }
 
@@ -318,7 +309,7 @@ impl DbClient for RedisClientImpl {
         let is_topic = if let Some(topic) = &message.topic {
             let topic_key = self.topic_key(&uaid, &message.channel_id, &topic);
             // We check if a message is already saved for this topic
-            let old_msg_id: Option<String> = con.get(&topic_key).unwrap();
+            let old_msg_id: Option<String> = con.get(&topic_key)?;
             // If a message is already stored for that topic, we remove it
             if let Some(id) = old_msg_id {
                 trace!("🉑 The topic had a message: {}", &id);
@@ -341,7 +332,7 @@ impl DbClient for RedisClientImpl {
         let msg_key = self.message_key(&uaid, &msg_id);
         pipe.set_options(
             msg_key,
-            serde_json::to_string(&NotificationRecord::from_notif(&uaid, message)).unwrap(),
+            serde_json::to_string(&NotificationRecord::from_notif(&uaid, message))?,
             opts,
         )
         // The function [fecth_timestamp_messages] takes a timestamp in input,
@@ -349,7 +340,7 @@ impl DbClient for RedisClientImpl {
         .zadd(&exp_list_key, &msg_id, expiry)
         .zadd(&msg_list_key, &msg_id, ms_since_epoch());
 
-        let _: () = pipe.exec(&mut con).unwrap();
+        let _: () = pipe.exec(&mut con)?;
         self.metrics
             .incr_with_tags("notification.message.stored")
             .with_tag("topic", &is_topic.to_string())
@@ -376,15 +367,14 @@ impl DbClient for RedisClientImpl {
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
         let mut con = self.connection()?;
-        let exp_id_list: Vec<String> = con.zrangebyscore(&exp_list_key, 0, timestamp).unwrap();
+        let exp_id_list: Vec<String> = con.zrangebyscore(&exp_list_key, 0, timestamp)?;
         if exp_id_list.len() > 0 {
             trace!("🉑🔥 Deleting {} expired msgs", exp_id_list.len());
             redis::pipe()
                 .del(&exp_id_list)
                 .zrem(&msg_list_key, &exp_id_list)
                 .zrem(&exp_list_key, &exp_id_list)
-                .exec(&mut con)
-                .unwrap();
+                .exec(&mut con)?;
         }
         Ok(())
     }
@@ -407,8 +397,7 @@ impl DbClient for RedisClientImpl {
             .del(&msg_key)
             .zrem(&msg_list_key, &chidmessageid)
             .zrem(&exp_list_key, &chidmessageid)
-            .exec(&mut con)
-            .unwrap();
+            .exec(&mut con)?;
         self.metrics
             .incr_with_tags("notification.message.deleted")
             .with_tag("database", &self.name())
@@ -455,8 +444,7 @@ impl DbClient for RedisClientImpl {
                 "+inf",
                 0,
                 limit as isize,
-            )
-            .unwrap()
+            )?
             .into_iter()
             .map(|(id, s): (String, u64)| (self.message_key(&uaid, &id), s))
             .unzip();
@@ -470,8 +458,7 @@ impl DbClient for RedisClientImpl {
         let messages: Vec<Notification> = if messages_id.len() == 0 {
             vec![]
         } else {
-            con.mget::<&Vec<String>, Vec<Option<String>>>(&messages_id)
-                .unwrap()
+            con.mget::<&Vec<String>, Vec<Option<String>>>(&messages_id)?
                 .into_iter()
                 .filter_map(|opt: Option<String>| {
                     if opt.is_none() {
