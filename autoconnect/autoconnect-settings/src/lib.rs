@@ -11,7 +11,6 @@ use config::{Config, ConfigError, Environment, File};
 use fernet::Fernet;
 use lazy_static::lazy_static;
 use serde::{Deserialize, Deserializer};
-use serde_json::json;
 
 use autopush_common::util::deserialize_u32_to_duration;
 
