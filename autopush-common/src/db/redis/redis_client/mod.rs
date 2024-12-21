@@ -23,18 +23,31 @@ mod error;
 use super::RedisDbSettings;
 
 /// Semi convenience wrapper to ensure that the UAID is formatted and displayed consistently.
-// TODO:Should we create something similar for ChannelID?
-struct Uaid(Uuid);
+struct Uaid<'a>(&'a Uuid);
 
-impl Display for Uaid {
+impl<'a> Display for Uaid<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.0.as_simple())
+        write!(f, "{}", self.0.as_hyphenated())
     }
 }
 
-impl From<Uaid> for String {
+impl<'a> From<Uaid<'a>> for String {
     fn from(uaid: Uaid) -> String {
-        uaid.0.as_simple().to_string()
+        uaid.0.as_hyphenated().to_string()
+    }
+}
+
+struct Chanid<'a>(&'a Uuid);
+
+impl<'a> Display for Chanid<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0.as_hyphenated())
+    }
+}
+
+impl<'a> From<Chanid<'a>> for String {
+    fn from(uaid: Chanid) -> String {
+        uaid.0.as_hyphenated().to_string()
     }
 }
 
@@ -94,38 +107,33 @@ impl RedisClientImpl {
         }
     }
 
-    fn user_key(&self, uaid: &Uuid) -> String {
-        format!("autopush/user/{}", uaid.as_hyphenated())
+    fn user_key(&self, uaid: &Uaid) -> String {
+        format!("autopush/user/{}", uaid)
     }
 
     /// This store the last connection record, but doesn't update User
-    fn last_co_key(&self, uaid: &Uuid) -> String {
-        format!("autopush/co/{}", uaid.as_hyphenated())
+    fn last_co_key(&self, uaid: &Uaid) -> String {
+        format!("autopush/co/{}", uaid)
     }
 
-    fn channel_list_key(&self, uaid: &Uuid) -> String {
-        format!("autopush/channels/{}", uaid.as_hyphenated())
+    fn channel_list_key(&self, uaid: &Uaid) -> String {
+        format!("autopush/channels/{}", uaid)
     }
 
-    fn message_list_key(&self, uaid: &Uuid) -> String {
-        format!("autopush/msgs/{}", uaid.as_hyphenated())
+    fn message_list_key(&self, uaid: &Uaid) -> String {
+        format!("autopush/msgs/{}", uaid)
     }
 
-    fn message_exp_list_key(&self, uaid: &Uuid) -> String {
-        format!("autopush/msgs_exp/{}", uaid.as_hyphenated())
+    fn message_exp_list_key(&self, uaid: &Uaid) -> String {
+        format!("autopush/msgs_exp/{}", uaid)
     }
 
-    fn message_key(&self, uaid: &Uuid, chidmessageid: &str) -> String {
-        format!("autopush/msg/{}/{}", uaid.as_hyphenated(), chidmessageid)
+    fn message_key(&self, uaid: &Uaid, chidmessageid: &str) -> String {
+        format!("autopush/msg/{}/{}", uaid, chidmessageid)
     }
 
-    fn topic_key(&self, uaid: &Uuid, chan_id: &Uuid, topic: &str) -> String {
-        format!(
-            "autopush/topic/{}/{}/{}",
-            uaid.as_hyphenated(),
-            chan_id.as_hyphenated(),
-            topic
-        )
+    fn topic_key(&self, uaid: &Uaid, chan_id: &Chanid, topic: &str) -> String {
+        format!("autopush/topic/{}/{}/{}", uaid, chan_id, topic)
     }
 }
 
@@ -136,8 +144,9 @@ impl DbClient for RedisClientImpl {
         trace!("🉑 Adding user");
         trace!("Logged at {}", &user.connected_at);
         let mut con = self.connection()?;
-        let user_key = self.user_key(&user.uaid);
-        let co_key = self.last_co_key(&user.uaid);
+        let uaid = Uaid(&user.uaid);
+        let user_key = self.user_key(&uaid);
+        let co_key = self.last_co_key(&uaid);
         let _: () = redis::pipe()
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
             .set_options(user_key, serde_json::to_string(user)?, self.redis_opts)
@@ -159,7 +168,7 @@ impl DbClient for RedisClientImpl {
     async fn update_user(&self, user: &mut User) -> DbResult<bool> {
         trace!("🉑 Updating user");
         let mut con = self.connection()?;
-        let co_key = self.last_co_key(&user.uaid);
+        let co_key = self.last_co_key(&Uaid(&user.uaid));
         let last_co: Option<u64> = con.get(&co_key)?;
         if last_co.is_some_and(|c| c < user.connected_at) {
             trace!(
@@ -176,7 +185,7 @@ impl DbClient for RedisClientImpl {
 
     async fn get_user(&self, uaid: &Uuid) -> DbResult<Option<User>> {
         let mut con = self.connection()?;
-        let user_key = self.user_key(uaid);
+        let user_key = self.user_key(&Uaid(uaid));
         let user: Option<User> = con
             .get::<&str, Option<String>>(&user_key)?
             .and_then(|s| serde_json::from_str(s.as_ref()).ok());
@@ -187,6 +196,7 @@ impl DbClient for RedisClientImpl {
     }
 
     async fn remove_user(&self, uaid: &Uuid) -> DbResult<()> {
+        let uaid = Uaid(uaid);
         let mut con = self.connection()?;
         let user_key = self.user_key(&uaid);
         let co_key = self.last_co_key(&uaid);
@@ -204,6 +214,7 @@ impl DbClient for RedisClientImpl {
     }
 
     async fn add_channel(&self, uaid: &Uuid, channel_id: &Uuid) -> DbResult<()> {
+        let uaid = Uaid(uaid);
         let mut con = self.connection()?;
         let co_key = self.last_co_key(&uaid);
         let chan_list_key = self.channel_list_key(&uaid);
@@ -217,6 +228,7 @@ impl DbClient for RedisClientImpl {
 
     /// Add channels in bulk (used mostly during migration)
     async fn add_channels(&self, uaid: &Uuid, channels: HashSet<Uuid>) -> DbResult<()> {
+        let uaid = Uaid(uaid);
         // channel_ids are stored as a set within a single redis key
         let mut con = self.connection()?;
         let co_key = self.last_co_key(&uaid);
@@ -235,6 +247,7 @@ impl DbClient for RedisClientImpl {
     }
 
     async fn get_channels(&self, uaid: &Uuid) -> DbResult<HashSet<Uuid>> {
+        let uaid = Uaid(uaid);
         let mut con = self.connection()?;
         let chan_list_key = self.channel_list_key(&uaid);
         let channels: HashSet<Uuid> = con
@@ -248,15 +261,17 @@ impl DbClient for RedisClientImpl {
 
     /// Delete the channel. Does not delete its associated pending messages.
     async fn remove_channel(&self, uaid: &Uuid, channel_id: &Uuid) -> DbResult<bool> {
+        let uaid = Uaid(uaid);
+        let channel_id = Chanid(channel_id);
         let mut con = self.connection()?;
         let co_key = self.last_co_key(&uaid);
         let chan_list_key = self.channel_list_key(&uaid);
         // Remove {channel_id} from autopush/channel/{auid}
-        trace!("🉑 Removing channel {}", channel_id.as_hyphenated());
+        trace!("🉑 Removing channel {}", channel_id);
         let (status,): (bool,) = redis::pipe()
             .set_options(co_key, ms_since_epoch(), self.redis_opts)
             .ignore()
-            .lrem(&chan_list_key, 1, channel_id.as_hyphenated().to_string())
+            .lrem(&chan_list_key, 1, channel_id.to_string())
             .query(&mut con)?;
         Ok(status)
     }
@@ -282,6 +297,7 @@ impl DbClient for RedisClientImpl {
     If the message contains a topic, we remove the old message
     */
     async fn save_message(&self, uaid: &Uuid, message: Notification) -> DbResult<()> {
+        let uaid = Uaid(uaid);
         let mut con = self.connection()?;
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
@@ -307,7 +323,7 @@ impl DbClient for RedisClientImpl {
         let mut pipe = redis::pipe();
 
         let is_topic = if let Some(topic) = &message.topic {
-            let topic_key = self.topic_key(&uaid, &message.channel_id, &topic);
+            let topic_key = self.topic_key(&uaid, &Chanid(&message.channel_id), &topic);
             // We check if a message is already saved for this topic
             let old_msg_id: Option<String> = con.get(&topic_key)?;
             // If a message is already stored for that topic, we remove it
@@ -332,7 +348,7 @@ impl DbClient for RedisClientImpl {
         let msg_key = self.message_key(&uaid, &msg_id);
         pipe.set_options(
             msg_key,
-            serde_json::to_string(&NotificationRecord::from_notif(&uaid, message))?,
+            serde_json::to_string(&NotificationRecord::from_notif(&uaid.0, message))?,
             opts,
         )
         // The function [fecth_timestamp_messages] takes a timestamp in input,
@@ -363,6 +379,7 @@ impl DbClient for RedisClientImpl {
 
     /// Delete expired messages
     async fn increment_storage(&self, uaid: &Uuid, timestamp: u64) -> DbResult<()> {
+        let uaid = Uaid(uaid);
         debug!("🉑🔥 Incrementing storage to {}", timestamp);
         let msg_list_key = self.message_list_key(&uaid);
         let exp_list_key = self.message_exp_list_key(&uaid);
@@ -381,6 +398,7 @@ impl DbClient for RedisClientImpl {
 
     /// Delete the notification from storage.
     async fn remove_message(&self, uaid: &Uuid, chidmessageid: &str) -> DbResult<()> {
+        let uaid = Uaid(uaid);
         trace!(
             "🉑 attemping to delete {:?} :: {:?}",
             uaid.to_string(),
@@ -434,6 +452,7 @@ impl DbClient for RedisClientImpl {
         timestamp: Option<u64>,
         limit: usize,
     ) -> DbResult<FetchMessageResponse> {
+        let uaid = Uaid(uaid);
         trace!("Fecthing {} messages since {:?}", limit, timestamp);
         let mut con = self.connection()?;
         let msg_list_key = self.message_list_key(&uaid);
