@@ -2,11 +2,12 @@ use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Display;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use cadence::{CountedExt, StatsdClient};
+use redis::aio::MultiplexedConnection;
 use redis::{AsyncCommands, SetExpiry, SetOptions};
 use uuid::Uuid;
 
@@ -56,6 +57,7 @@ impl<'a> From<Chanid<'a>> for String {
 pub struct RedisClientImpl {
     /// Database connector string
     pub client: redis::Client,
+    pub conn: Arc<Mutex<Option<MultiplexedConnection>>>,
     pub(crate) settings: RedisDbSettings,
     /// Metrics client
     metrics: Arc<StatsdClient>,
@@ -75,6 +77,7 @@ impl RedisClientImpl {
 
         Ok(Self {
             client,
+            conn: Arc::new(Mutex::new(None)),
             settings: db_settings,
             metrics,
             redis_opts: SetOptions::default().with_expiration(SetExpiry::EX(MAX_ROUTER_TTL)),
@@ -88,17 +91,34 @@ impl RedisClientImpl {
     Pools also return a ConnectionLike, so we can add support for pools later.
     */
     async fn connection(&self) -> DbResult<redis::aio::MultiplexedConnection> {
+        {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|e| DbError::General(e.to_string()))?
+                .clone();
+
+            if let Some(co) = conn {
+                return Ok(co);
+            }
+        }
         let config = if self.settings.timeout.is_some_and(|t| !t.is_zero()) {
             redis::AsyncConnectionConfig::new()
                 .set_connection_timeout(self.settings.timeout.unwrap())
         } else {
             redis::AsyncConnectionConfig::new()
         };
-        Ok(self
+        let co = self
             .client
             .get_multiplexed_async_connection_with_config(&config)
             .await
-            .map_err(|e| DbError::ConnectionError(format!("Cannot connect to redis: {}", e)))?)
+            .map_err(|e| DbError::ConnectionError(format!("Cannot connect to redis: {}", e)))?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|e| DbError::General(e.to_string()))?;
+        *conn = Some(co.clone());
+        Ok(co)
     }
 
     fn user_key(&self, uaid: &Uaid) -> String {
