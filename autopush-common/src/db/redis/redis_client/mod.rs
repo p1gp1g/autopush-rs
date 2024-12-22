@@ -459,10 +459,11 @@ impl DbClient for RedisClientImpl {
         trace!("🐰 Fecthing {} messages since {:?}", limit, timestamp);
         let mut con = self.connection().await?;
         let msg_list_key = self.message_list_key(&uaid);
+        // ZRANGE Key (x +inf LIMIT 0 limit
         let (messages_id, mut scores): (Vec<String>, Vec<u64>) = con
-            .zrangebyscore_limit_withscores::<&str, u64, &str, Vec<(String, u64)>>(
+            .zrangebyscore_limit_withscores::<&str, &str, &str, Vec<(String, u64)>>(
                 &msg_list_key,
-                timestamp.unwrap_or(0),
+                &format!("({}", timestamp.unwrap_or(0)),
                 "+inf",
                 0,
                 limit as isize,
