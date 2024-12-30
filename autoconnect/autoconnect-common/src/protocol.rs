@@ -12,7 +12,7 @@ use std::str::FromStr;
 use serde_derive::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use autopush_common::notification::Notification;
+use autopush_common::{db::Urgency, notification::Notification};
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -64,6 +64,10 @@ pub enum ClientMessage {
     Nack {
         code: Option<i32>,
         version: String,
+    },
+
+    Urgency {
+        min: Urgency,
     },
 
     Ping,
@@ -122,6 +126,10 @@ pub enum ServerMessage {
     },
 
     Notification(Notification),
+
+    Urgency {
+        status: u32,
+    },
 
     Ping,
 }
