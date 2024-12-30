@@ -7,7 +7,11 @@ use autoconnect_common::{
     broadcast::Broadcast,
     protocol::{BroadcastValue, ClientAck, ClientMessage, ServerMessage},
 };
-use autopush_common::{endpoint::make_endpoint, util::sec_since_epoch};
+use autopush_common::{
+    db::Urgency,
+    endpoint::make_endpoint,
+    util::{ms_since_epoch, sec_since_epoch},
+};
 
 use super::WebPushClient;
 use crate::error::{SMError, SMErrorKind};
@@ -38,6 +42,7 @@ impl WebPushClient {
                 self.nack(code);
                 Ok(vec![])
             }
+            ClientMessage::Urgency { min } => Ok(self.change_min_urgency(min).await?),
             ClientMessage::Ping => Ok(vec![self.ping()?]),
         }
     }
@@ -329,5 +334,43 @@ impl WebPushClient {
         } else {
             Ok(vec![])
         }
+    }
+
+    /// Update minimum urgency for the user and the flag
+    ///
+    /// If the new urgency is lower than the previous one,
+    /// We check pending messages, to send messages that were
+    /// retained because of their urgency
+    async fn change_min_urgency(
+        &mut self,
+        new_min: Urgency,
+    ) -> Result<Vec<ServerMessage>, SMError> {
+        // Change the min urgency
+        self.flags.min_urgency = new_min;
+
+        let status = if let Some(mut user) = self.app_state.db.get_user(&self.uaid).await? {
+            let current_urgency = user.urgency.unwrap_or(Urgency::VeryLow);
+            // We update the user
+            user.urgency = Some(new_min);
+            user.connected_at = ms_since_epoch();
+
+            // if new urgency < previous: fetch pending messages
+            if self.app_state.db.update_user(&mut user).await.is_ok() {
+                if new_min < current_urgency {
+                    self.ack_state.unacked_stored_highest = None;
+                    self.current_timestamp = None;
+                    let mut res = vec![ServerMessage::Urgency { status: 200 }];
+                    res.append(&mut self.check_storage().await?);
+                    // We return the Urgency Ack + pending messages
+                    return Ok(res);
+                }
+                200
+            } else {
+                500
+            }
+        } else {
+            404
+        };
+        Ok(vec![ServerMessage::Urgency { status }])
     }
 }

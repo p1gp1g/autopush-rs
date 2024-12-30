@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use autopush_common::db::Urgency;
 use cadence::{Counted, CountedExt, StatsdClient, Timed};
 use reqwest::{Response, StatusCode};
 use serde_json::Value;
@@ -46,8 +47,20 @@ impl Router for WebPushRouter {
         );
         trace!("✉ Notification = {:?}", notification);
 
+        let notif_urgency = &notification
+            .headers
+            .urgency
+            .as_ref()
+            .and_then(|v| Some(Urgency::from(v.as_str())));
+        // If the notification urgency is lower than the user one, we do not send it
+        if notif_urgency < &user.urgency {
+            trace!(
+                "✉ Notification has an urgency lower than the user one: {:?} < {:?}",
+                &notif_urgency,
+                &user.urgency
+            );
         // Check if there is a node connected to the client
-        if let Some(node_id) = &user.node_id {
+        } else if let Some(node_id) = &user.node_id {
             trace!(
                 "✉ User has a node ID, sending notification to node: {}",
                 &node_id
