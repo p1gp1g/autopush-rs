@@ -35,3 +35,4 @@ ctor.workspace = true
 autoconnect_common = { workspace = true, features = ["test-support"] }
 
 [features]
+urgency = ["autoconnect_ws_sm/urgency"]
