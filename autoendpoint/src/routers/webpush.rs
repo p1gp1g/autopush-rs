@@ -58,6 +58,7 @@ impl Router for WebPushRouter {
 
         let notif_urgency = Urgency::from(notification.headers.urgency.as_ref());
         // If the notification urgency is lower than the user one, we do not send it
+        // If the user hasn't set a minimum urgency, we accept all notifications
         if notif_urgency < user.urgency.unwrap_or(Urgency::VeryLow) {
             trace!(
                 "✉ Notification has an urgency lower than the user one: {:?} < {:?}",
