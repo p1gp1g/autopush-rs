@@ -228,6 +228,12 @@ impl From<&str> for Urgency {
     }
 }
 
+impl From<Option<&String>> for Urgency {
+    fn from(value: Option<&String>) -> Self {
+        Urgency::from(value.and_then(|v| Some(v.as_str())).unwrap_or(""))
+    }
+}
+
 /// A stored Notification record. This is a notification that is to be stored
 /// until the User Agent reconnects. These are then converted to publishable
 /// [crate::db::Notification] records.

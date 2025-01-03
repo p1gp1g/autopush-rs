@@ -123,12 +123,7 @@ impl WebPushClient {
         messages.retain(|msg| {
             if !msg.expired(now_sec) {
                 if let Some(headers) = msg.headers.as_ref() {
-                    return Urgency::from(
-                        headers
-                            .get("urgency")
-                            .and_then(|v| Some(v.as_str()))
-                            .unwrap_or(""),
-                    ) >= self.flags.min_urgency;
+                    return Urgency::from(headers.get("urgency")) >= self.flags.min_urgency;
                 } else {
                     return true;
                 }
