@@ -56,4 +56,5 @@ docopt = "1.1"
 default = ["bigtable"]
 bigtable = ["autopush_common/bigtable", "autoconnect_settings/bigtable"]
 emulator = ["bigtable"]
+urgency = ["autoconnect_ws/urgency"]
 log_vapid = []

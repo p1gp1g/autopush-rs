@@ -12,7 +12,10 @@ use std::str::FromStr;
 use serde_derive::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use autopush_common::{db::Urgency, notification::Notification};
+use autopush_common::notification::Notification;
+
+#[cfg(feature = "urgency")]
+use autopush_common::db::Urgency;
 
 #[derive(Debug, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
@@ -66,6 +69,7 @@ pub enum ClientMessage {
         version: String,
     },
 
+    #[cfg(feature = "urgency")]
     Urgency {
         min: Urgency,
     },
@@ -127,6 +131,7 @@ pub enum ServerMessage {
 
     Notification(Notification),
 
+    #[cfg(feature = "urgency")]
     Urgency {
         status: u32,
     },

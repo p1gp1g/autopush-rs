@@ -7,11 +7,10 @@ use autoconnect_common::{
     broadcast::Broadcast,
     protocol::{BroadcastValue, ClientAck, ClientMessage, ServerMessage},
 };
-use autopush_common::{
-    db::Urgency,
-    endpoint::make_endpoint,
-    util::{ms_since_epoch, sec_since_epoch},
-};
+use autopush_common::{endpoint::make_endpoint, util::sec_since_epoch};
+
+#[cfg(feature = "urgency")]
+use autopush_common::{db::Urgency, util::ms_since_epoch};
 
 use super::WebPushClient;
 use crate::error::{SMError, SMErrorKind};
@@ -42,6 +41,7 @@ impl WebPushClient {
                 self.nack(code);
                 Ok(vec![])
             }
+            #[cfg(feature = "urgency")]
             ClientMessage::Urgency { min } => Ok(self.change_min_urgency(min).await?),
             ClientMessage::Ping => Ok(vec![self.ping()?]),
         }
@@ -341,6 +341,7 @@ impl WebPushClient {
     /// If the new urgency is lower than the previous one,
     /// We check pending messages, to send messages that were
     /// retained because of their urgency
+    #[cfg(feature = "urgency")]
     async fn change_min_urgency(
         &mut self,
         new_min: Urgency,
