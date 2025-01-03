@@ -56,13 +56,9 @@ impl Router for WebPushRouter {
         );
         trace!("✉ Notification = {:?}", notification);
 
-        let notif_urgency = &notification
-            .headers
-            .urgency
-            .as_ref()
-            .and_then(|v| Some(Urgency::from(v.as_str())));
+        let notif_urgency = Urgency::from(notification.headers.urgency.as_ref());
         // If the notification urgency is lower than the user one, we do not send it
-        if notif_urgency < &user.urgency {
+        if notif_urgency < user.urgency.unwrap_or(Urgency::VeryLow) {
             trace!(
                 "✉ Notification has an urgency lower than the user one: {:?} < {:?}",
                 &notif_urgency,
