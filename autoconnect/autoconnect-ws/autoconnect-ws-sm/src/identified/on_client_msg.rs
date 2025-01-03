@@ -349,6 +349,8 @@ impl WebPushClient {
         self.flags.min_urgency = new_min;
 
         let status = if let Some(mut user) = self.app_state.db.get_user(&self.uaid).await? {
+            // If the user hasn't set a minimum urgency yet, they receive all messages,
+            // which is equivalent to setting very-low as a minimum
             let current_urgency = user.urgency.unwrap_or(Urgency::VeryLow);
             // We update the user
             user.urgency = Some(new_min);
