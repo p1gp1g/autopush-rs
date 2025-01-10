@@ -349,31 +349,26 @@ impl WebPushClient {
         // Change the min urgency
         self.flags.min_urgency = new_min;
 
-        let status = if let Some(mut user) = self.app_state.db.get_user(&self.uaid).await? {
+        if let Some(mut user) = self.app_state.db.get_user(&self.uaid).await? {
             // If the user hasn't set a minimum urgency yet, they receive all messages,
             // which is equivalent to setting very-low as a minimum
             let current_urgency = user.urgency.unwrap_or(Urgency::VeryLow);
+
             // We update the user
             user.urgency = Some(new_min);
             user.connected_at = ms_since_epoch();
+            self.app_state.db.update_user(&mut user).await?;
 
+            let mut res = vec![ServerMessage::Urgency { status: 200 }];
             // if new urgency < previous: fetch pending messages
-            if self.app_state.db.update_user(&mut user).await.is_ok() {
-                if new_min < current_urgency {
-                    self.ack_state.unacked_stored_highest = None;
-                    self.current_timestamp = None;
-                    let mut res = vec![ServerMessage::Urgency { status: 200 }];
-                    res.append(&mut self.check_storage().await?);
-                    // We return the Urgency Ack + pending messages
-                    return Ok(res);
-                }
-                200
-            } else {
-                500
+            if new_min < current_urgency {
+                self.ack_state.unacked_stored_highest = None;
+                self.current_timestamp = None;
+                res.append(&mut self.check_storage().await?);
             }
+            Ok(res)
         } else {
-            404
-        };
-        Ok(vec![ServerMessage::Urgency { status }])
+            Ok(vec![ServerMessage::Urgency { status: 404 }])
+        }
     }
 }
