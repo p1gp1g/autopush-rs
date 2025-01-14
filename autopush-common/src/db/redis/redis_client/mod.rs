@@ -84,12 +84,10 @@ impl RedisClientImpl {
         })
     }
 
-    /**
-    Return a [ConnectionLike], which implement redis [Commands] and can be
-    used in pipes.
-
-    Pools also return a ConnectionLike, so we can add support for pools later.
-    */
+    /// Return a [ConnectionLike], which implement redis [Commands] and can be
+    /// used in pipes.
+    ///
+    /// Pools also return a ConnectionLike, so we can add support for pools later.
     async fn connection(&self) -> DbResult<redis::aio::MultiplexedConnection> {
         {
             let conn = self
@@ -309,11 +307,9 @@ impl DbClient for RedisClientImpl {
         Ok(true)
     }
 
-    /**
-    Write the notification to storage.
-
-    If the message contains a topic, we remove the old message
-    */
+    /// Write the notification to storage.
+    ///
+    /// If the message contains a topic, we remove the old message
     async fn save_message(&self, uaid: &Uuid, message: Notification) -> DbResult<()> {
         let uaid = Uaid(uaid);
         let mut con = self.connection().await?;
@@ -429,9 +425,7 @@ impl DbClient for RedisClientImpl {
         Ok(())
     }
 
-    /**
-    Topic messages are handled as other messages with redis, we return nothing.
-    */
+    /// Topic messages are handled as other messages with redis, we return nothing.
     async fn fetch_topic_messages(
         &self,
         _uaid: &Uuid,
@@ -487,7 +481,7 @@ impl DbClient for RedisClientImpl {
                 .into_iter()
                 .filter_map(|opt: Option<String>| {
                     if opt.is_none() {
-                        // We return dummy expired event if we can't fetch the say event,
+                        // We return dummy expired event if we can't fetch the said event,
                         // it means the event has expired
                         Some(Notification {
                             timestamp: 1,
