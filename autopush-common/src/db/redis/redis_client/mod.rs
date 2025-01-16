@@ -503,7 +503,8 @@ impl DbClient for RedisClientImpl {
     }
 
     async fn health_check(&self) -> DbResult<bool> {
-        let _ = self.connection().await?;
+        let mut con = self.connection().await?;
+        let _: () = con.ping().await?;
         Ok(true)
     }
 
