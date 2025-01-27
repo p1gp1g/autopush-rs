@@ -23,7 +23,8 @@ pub fn build_message_data(notification: &Notification) -> ApiResult<HashMap<&'st
         message_data.insert_opt("enc", notification.headers.encryption.as_ref());
         message_data.insert_opt("cryptokey", notification.headers.crypto_key.as_ref());
         message_data.insert_opt("enckey", notification.headers.encryption_key.as_ref());
-        // Report the data to the UA. How this value is reported back is still a work in progress.
+        // Report the data to the UA. How this value is reported back is still a work in progress, but
+        // we do set the state to "accepted" on desktop "ACK" at least.
         trace!(
             "🔍 Sending Reliability ID: {:?}",
             notification.subscription.reliability_id
@@ -150,7 +151,9 @@ pub async fn handle_error(
 
     if let Some(Ok(claims)) = vapid.map(|v| v.vapid.claims()) {
         let mut extras = err.extras.unwrap_or_default();
-        extras.extend([("sub".to_owned(), claims.sub.unwrap_or_default())]);
+        if let Some(sub) = claims.sub {
+            extras.extend([("sub".to_owned(), sub)]);
+        }
         err.extras = Some(extras);
     };
     err
@@ -256,6 +259,10 @@ pub mod tests {
             timestamp: 0,
             sort_key_timestamp: 0,
             data,
+            #[cfg(feature = "reliable_report")]
+            reliable_state: None,
+            #[cfg(feature = "reliable_report")]
+            reliability_id: None,
         }
     }
 }
