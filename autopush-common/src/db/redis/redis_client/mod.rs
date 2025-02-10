@@ -11,7 +11,6 @@ use redis::aio::MultiplexedConnection;
 use redis::{AsyncCommands, SetExpiry, SetOptions};
 use uuid::Uuid;
 
-use crate::db::NotificationRecord;
 use crate::db::{
     client::{DbClient, FetchMessageResponse},
     error::{DbError, DbResult},
@@ -346,15 +345,11 @@ impl DbClient for RedisClientImpl {
         // Store notification record in autopush/msg/{aud}/{chidmessageid}
         // And store {chidmessageid} in autopush/msgs/{aud}
         let msg_key = self.message_key(&uaid, &msg_id);
-        pipe.set_options(
-            msg_key,
-            serde_json::to_string(&NotificationRecord::from_notif(&uaid.0, message))?,
-            opts,
-        )
-        // The function [fecth_timestamp_messages] takes a timestamp in input,
-        // here we use the timestamp of the record (in ms)
-        .zadd(&exp_list_key, &msg_id, expiry)
-        .zadd(&msg_list_key, &msg_id, ms_since_epoch());
+        pipe.set_options(msg_key, serde_json::to_string(&message)?, opts)
+            // The function [fecth_timestamp_messages] takes a timestamp in input,
+            // here we use the timestamp of the record (in ms)
+            .zadd(&exp_list_key, &msg_id, expiry)
+            .zadd(&msg_list_key, &msg_id, ms_since_epoch());
 
         let _: () = pipe.exec_async(&mut con).await?;
         self.metrics
@@ -489,7 +484,6 @@ impl DbClient for RedisClientImpl {
                         })
                     } else {
                         opt.and_then(|m| serde_json::from_str(&m).ok())
-                            .and_then(|m: NotificationRecord| m.into_notif().ok())
                     }
                 })
                 .collect()
